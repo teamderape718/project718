@@ -19,7 +19,12 @@ jobs:
           script_stop: true
           script: |
             set -e
-            cd /var/www/q-cfa
+            QC_ROOT=""
+            for dir in /root/qcfa /var/www/q-cfa /var/www/qcfa; do
+              if [ -d "$dir/.git" ]; then QC_ROOT="$dir"; break; fi
+            done
+            if [ -z "$QC_ROOT" ]; then echo "Aucun depot git trouve (/root/qcfa ou /var/www/q-cfa)"; exit 1; fi
+            cd "$QC_ROOT"
             git pull origin main || git pull origin master
             npm install
             npm run db:migrate

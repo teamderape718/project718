@@ -2,6 +2,23 @@ import React, { useEffect, useState } from "react";
 import { NavLink, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { api, getToken, setToken } from "./api";
 
+/** Email du compte administrateur (prérempli sur la page de connexion). */
+const ADMIN_LOGIN_EMAIL = "teamderape.718@yahoo.com";
+
+function BrandLogo({ className }: { className?: string }) {
+  return (
+    <img
+      className={className}
+      src="/logo.png"
+      alt="TEAM DÉRAPE 718 — Performance mécanique"
+      onError={(e) => {
+        const el = e.currentTarget;
+        if (!el.src.endsWith("/logo.svg")) el.src = "/logo.svg";
+      }}
+    />
+  );
+}
+
 type Video = {
   id: number;
   title: string;
@@ -46,57 +63,32 @@ function Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="layout">
       <nav className="top">
-        <span className="brand">TEAM DERAPE</span>
-        <NavLink className={({ isActive }) => (isActive ? "active" : "")} to="/">
-          Accueil
+        <NavLink to="/" className="nav-brand">
+          <BrandLogo />
+          <span className="nav-brand-text">
+            <span className="sub">Performance mécanique</span>
+            <span className="main">TEAM DÉRAPE 718</span>
+          </span>
         </NavLink>
-        <NavLink className={({ isActive }) => (isActive ? "active" : "")} to="/videos">
-          Vidéos
-        </NavLink>
-        <NavLink className={({ isActive }) => (isActive ? "active" : "")} to="/merch">
-          Boutique
-        </NavLink>
-        <NavLink className={({ isActive }) => (isActive ? "active" : "")} to="/inventaire">
-          Véhicules &amp; machines
-        </NavLink>
-        <NavLink className={({ isActive }) => (isActive ? "active" : "")} to="/client">
-          Espace client
-        </NavLink>
-        <NavLink className={({ isActive }) => (isActive ? "active" : "")} to="/admin">
-          Connexion admin
-        </NavLink>
+        <div className="nav-links">
+          <NavLink className={({ isActive }) => (isActive ? "active" : "")} to="/">
+            Accueil
+          </NavLink>
+          <NavLink className={({ isActive }) => (isActive ? "active" : "")} to="/videos">
+            Vidéos
+          </NavLink>
+          <NavLink className={({ isActive }) => (isActive ? "active" : "")} to="/merch">
+            Boutique
+          </NavLink>
+          <NavLink className={({ isActive }) => (isActive ? "active" : "")} to="/inventaire">
+            Véhicules &amp; machines
+          </NavLink>
+          <span className="nav-cta">
+            <NavLink to="/connexion">Connexion</NavLink>
+          </span>
+        </div>
       </nav>
       {children}
-    </div>
-  );
-}
-
-function EspaceClient() {
-  return (
-    <div>
-      <h1 style={{ marginTop: 0 }}>Espace client</h1>
-      <p className="muted">
-        Ici, tout le monde peut voir le catalogue : <strong>aucun compte</strong> n’est nécessaire pour
-        parcourir les vidéos, la boutique et les véhicules/machines en vitrine.
-      </p>
-      <div className="card-grid two" style={{ marginTop: "1.5rem" }}>
-        <div className="card">
-          <h3>Vidéos</h3>
-          <NavLink to="/videos">Voir les vidéos →</NavLink>
-        </div>
-        <div className="card">
-          <h3>Boutique (merch)</h3>
-          <NavLink to="/merch">Voir la boutique →</NavLink>
-        </div>
-        <div className="card">
-          <h3>Véhicules &amp; machines</h3>
-          <NavLink to="/inventaire">Voir l’inventaire →</NavLink>
-        </div>
-      </div>
-      <p className="muted" style={{ marginTop: "2rem" }}>
-        Pour <strong>ajouter ou modifier</strong> produits et items : utilise{" "}
-        <NavLink to="/admin">Connexion admin</NavLink> (réservé à toi).
-      </p>
     </div>
   );
 }
@@ -104,24 +96,48 @@ function EspaceClient() {
 function Home() {
   return (
     <div>
-      <h1 style={{ fontSize: "1.75rem", marginTop: 0 }}>Bienvenue</h1>
-      <p className="muted">
-        Site public + boutique + inventaire. Gestion du contenu en{" "}
-        <NavLink to="/admin">admin</NavLink>. Deals Kijiji et SMS via le{" "}
-        <strong>bot Telegram</strong>.
-      </p>
-      <div className="card-grid two" style={{ marginTop: "2rem" }}>
+      <section className="hero">
+        <span className="hero-badge">Québec · Mécanique performance</span>
+        <h1>
+          <span className="hl-purple">Mécanique</span> de précision,{" "}
+          <span className="hl-lime">l’énergie</span> du 718.
+        </h1>
+        <p className="hero-lead">
+          Boutique officielle, inventaire véhicules &amp; machines, contenus vidéo. Une seule connexion
+          sécurisée pour gérer le site. Alertes deals et actions via notre{" "}
+          <strong style={{ color: "var(--lime)" }}>bot Telegram</strong> (scan Kijiji, SMS selon
+          configuration).
+        </p>
+        <div className="hero-actions">
+          <NavLink className="primary" to="/merch">
+            Voir la boutique
+          </NavLink>
+          <NavLink className="ghost" to="/inventaire">
+            Inventaire
+          </NavLink>
+          <NavLink className="ghost" to="/videos">
+            Vidéos
+          </NavLink>
+        </div>
+      </section>
+
+      <div className="card-grid two">
         <div className="card">
           <h3>Vidéos</h3>
-          <p className="muted">Clips et contenus sélectionnés.</p>
-          <NavLink to="/videos">Voir →</NavLink>
+          <p className="muted">Clips, projets et contenus sélectionnés.</p>
+          <NavLink to="/videos">Voir la section →</NavLink>
         </div>
         <div className="card">
           <h3>Inventaire</h3>
-          <p className="muted">Stock disponible (public).</p>
-          <NavLink to="/inventaire">Voir →</NavLink>
+          <p className="muted">Véhicules et machines en vitrine.</p>
+          <NavLink to="/inventaire">Voir l’inventaire →</NavLink>
         </div>
       </div>
+
+      <p className="footer-note">
+        Le catalogue est public. Pour modifier produits, vidéos et fiches :{" "}
+        <NavLink to="/connexion">Connexion</NavLink> (compte administrateur).
+      </p>
     </div>
   );
 }
@@ -222,8 +238,8 @@ function InventoryPage() {
   );
 }
 
-function AdminLogin() {
-  const [email, setEmail] = useState("");
+function ConnexionPage() {
+  const [email, setEmail] = useState(ADMIN_LOGIN_EMAIL);
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const nav = useNavigate();
@@ -245,21 +261,28 @@ function AdminLogin() {
   }
 
   return (
-    <div style={{ maxWidth: 360 }}>
-      <h1>Connexion admin</h1>
+    <div className="login-card">
+      <div className="logo-wrap">
+        <BrandLogo />
+      </div>
+      <h1>Connexion</h1>
+      <p className="muted" style={{ marginTop: "-0.25rem", marginBottom: "1.25rem" }}>
+        Accès réservé à l’administration du site (contenu, inventaire, négociations).
+      </p>
       <form onSubmit={submit}>
         <label>Email</label>
-        <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" required />
+        <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" required autoComplete="username" />
         <label>Mot de passe</label>
         <input
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           type="password"
           required
+          autoComplete="current-password"
         />
-        {err && <p style={{ color: "var(--accent)" }}>{err}</p>}
-        <button className="btn" type="submit">
-          Entrer
+        {err && <p style={{ color: "#f87171", marginBottom: "0.75rem" }}>{err}</p>}
+        <button className="btn" type="submit" style={{ width: "100%" }}>
+          Se connecter
         </button>
       </form>
     </div>
@@ -290,17 +313,17 @@ function AdminPanel() {
         setNego(n);
       } catch {
         setToken(null);
-        nav("/admin");
+        nav("/connexion");
       }
     };
     load();
   }, [nav]);
 
-  if (!getToken()) return <Navigate to="/admin" replace />;
+  if (!getToken()) return <Navigate to="/connexion" replace />;
 
   return (
     <div>
-      <h1>Admin</h1>
+      <h1>Administration</h1>
       <div className="admin-tabs">
         <button type="button" className={tab === "videos" ? "on" : ""} onClick={() => setTab("videos")}>
           Vidéos
@@ -314,7 +337,7 @@ function AdminPanel() {
         <button type="button" className={tab === "nego" ? "on" : ""} onClick={() => setTab("nego")}>
           Négociations
         </button>
-        <button type="button" className="secondary btn" onClick={() => { setToken(null); nav("/admin"); }}>
+        <button type="button" className="secondary btn" onClick={() => { setToken(null); nav("/connexion"); }}>
           Déconnexion
         </button>
       </div>
@@ -592,11 +615,12 @@ export default function App() {
     <Layout>
       <Routes>
         <Route path="/" element={<Home />} />
-        <Route path="/client" element={<EspaceClient />} />
+        <Route path="/client" element={<Navigate to="/" replace />} />
         <Route path="/videos" element={<VideosPage />} />
         <Route path="/merch" element={<MerchPage />} />
         <Route path="/inventaire" element={<InventoryPage />} />
-        <Route path="/admin" element={<AdminLogin />} />
+        <Route path="/connexion" element={<ConnexionPage />} />
+        <Route path="/admin" element={<Navigate to="/connexion" replace />} />
         <Route path="/admin/panel" element={<AdminPanel />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

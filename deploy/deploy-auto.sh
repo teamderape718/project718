@@ -68,6 +68,15 @@ else
   echo ">>> .env existe déjà — non écrasé."
 fi
 
+# Si .env vient de .env.example, DATABASE_URL est souvent commenté → migrations échouent
+if ! grep -qE '^DATABASE_URL=postgresql' "$QC_ROOT/.env"; then
+  sed -i 's|^# *DATABASE_URL=.*|DATABASE_URL=postgresql://qcfa:qcfa@127.0.0.1:5432/qcfa|' "$QC_ROOT/.env" 2>/dev/null || true
+  if ! grep -qE '^DATABASE_URL=postgresql' "$QC_ROOT/.env"; then
+    echo "DATABASE_URL=postgresql://qcfa:qcfa@127.0.0.1:5432/qcfa" >>"$QC_ROOT/.env"
+  fi
+  echo ">>> DATABASE_URL corrigé pour Postgres (Docker)."
+fi
+
 run_as() {
   sudo -H -u "$REAL_USER" bash -c "set -e; cd '$QC_ROOT'; $*"
 }
