@@ -1,0 +1,28 @@
+# Déploie sur ton VPS quand tu pousses sur la branche main.
+# Configuration unique : voir .github/workflows/README-DEPLOY.md
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main, master]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -e
+            cd /var/www/q-cfa
+            git pull origin main || git pull origin master
+            npm install
+            npm run db:migrate
+            npm run web:build
+            pm2 restart qcfa-api || pm2 start deploy/ecosystem.config.cjs --only qcfa-api
+            pm2 restart qcfa-bot || true
