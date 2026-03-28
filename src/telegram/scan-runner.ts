@@ -1,6 +1,7 @@
 import type { Context } from "telegraf";
 import { Markup } from "telegraf";
 import { loadEnv } from "../config/env.js";
+import { notifyTelegramHtml } from "../services/telegram-notify.js";
 import { pickDealCandidates } from "../deals/hot-candidates.js";
 import { getPortalPool } from "../portal/db-access.js";
 import * as repo from "../portal/repo.js";
@@ -94,6 +95,18 @@ export async function runTelegramScan(ctx: Context): Promise<void> {
         Markup.button.callback("Commencer le deal", `deal:${id}`),
       ]),
     });
+
+    if (c.potentialLabel === "hot") {
+      const base = env.PUBLIC_SITE_URL?.replace(/\/$/, "");
+      const inline_keyboard =
+        base != null
+          ? [[{ text: "🤝 Admin négociations", url: `${base}/admin/panel?tab=negotiations` }]]
+          : undefined;
+      await notifyTelegramHtml(
+        `<b>Listing HOT</b>\n${escapeHtml(c.listing.title)}\n<a href="${escapeHtml(c.listing.url)}">Annonce</a>`,
+        inline_keyboard ? { inline_keyboard } : undefined
+      );
+    }
   }
 }
 

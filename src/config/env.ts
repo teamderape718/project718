@@ -22,6 +22,8 @@ const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   /** Liste d’IDs de chat autorisés, séparés par des virgules (vide = tout le monde) */
   TELEGRAM_ALLOWED_CHAT_IDS: z.string().optional(),
+  /** Sans @ — pour liens t.me dans les notifications (SMS → ouvrir le deal dans le bot) */
+  TELEGRAM_BOT_USERNAME: z.string().optional(),
   TELEGRAM_SCAN_PAGES: z.coerce.number().min(1).max(20).default(2),
   TELEGRAM_DEALS_MAX: z.coerce.number().min(1).max(15).default(5),
   /** Marge min. (%) sous médiane pour « fort potentiel » si pas encore HOT (15%) */
@@ -33,6 +35,16 @@ const envSchema = z.object({
   ADMIN_PASSWORD: z.string().min(8).optional(),
   /** URL publique du site (lien dans Telegram), ex. https://tondomaine.com */
   PUBLIC_SITE_URL: z.string().url().optional(),
+  /** Stripe Checkout (merch) */
+  STRIPE_SECRET_KEY: z.string().optional(),
+  STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  /** Telnyx inbound webhook (Ed25519 public key, base64) — optionnel en dev */
+  TELNYX_WEBHOOK_PUBLIC_KEY: z.string().optional(),
+  /** OpenAI pour NLU bot (optionnel) */
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_MODEL: z.string().default("gpt-4o-mini"),
+  /** 0/false = regex seulement ; par défaut LLM si OPENAI_API_KEY est défini */
+  TELEGRAM_NLU_LLM: z.string().optional(),
   HEADLESS: z.preprocess((val) => {
     if (val === undefined || val === null || val === "") return true;
     const s = String(val).toLowerCase();

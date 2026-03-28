@@ -4,6 +4,19 @@ import { loadEnv } from "../config/env.js";
 import { getPortalPool } from "../portal/db-access.js";
 import { hashPassword, verifyPassword } from "../portal/password.js";
 import * as repo from "../portal/repo.js";
+import {
+  createMerchCheckoutSession,
+  getStripe,
+  stripePaymentsDashboardBase,
+} from "../services/stripe-checkout.js";
+import {
+  buildSmsFromTemplate,
+  isSmsTemplateKey,
+  validateSmsBodyLength,
+  validateSmsTemplatePayload,
+} from "../services/sms-templates.js";
+import { smsWithTemplate } from "../services/telnyx-sms.js";
+import { normalizeToE164 } from "../utils/phone.js";
 
 async function authAdmin(req: FastifyRequest, reply: FastifyReply) {
   try {
@@ -100,11 +113,83 @@ export async function registerPortalRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get("/api/public/vehicle-projects", async (_request, reply) => {
+    const pool = getPortalPool();
+    if (!pool) return noDb(reply);
+    const client = await pool.connect();
+    try {
+      return await repo.listPublicVehicleProjects(client);
+    } finally {
+      client.release();
+    }
+  });
+
+  app.get<{
+    Params: { slug: string };
+  }>("/api/public/vehicle-projects/:slug", async (request, reply) => {
+    const pool = getPortalPool();
+    if (!pool) return noDb(reply);
+    const slug = request.params.slug?.trim();
+    if (!slug) return reply.status(400).send({ error: "slug requis" });
+    const client = await pool.connect();
+    try {
+      const row = await repo.getPublishedVehicleProjectBySlug(client, slug);
+      if (!row) return reply.status(404).send({ error: "Projet introuvable" });
+      return row;
+    } finally {
+      client.release();
+    }
+  });
+
   app.get("/api/public/site-meta", async () => {
     return {
       name: "TEAM DERAPE",
       siteUrl: env.PUBLIC_SITE_URL ?? null,
     };
+  });
+
+  app.post<{
+    Body: { merch_id?: number; quantity?: number };
+  }>("/api/public/checkout", async (request, reply) => {
+    if (!getStripe()) {
+      return reply.status(503).send({ error: "Paiement Stripe non configuré" });
+    }
+    const pool = getPortalPool();
+    if (!pool) return noDb(reply);
+    const merchId = Number(request.body?.merch_id);
+    const qty = Math.min(99, Math.max(1, Number(request.body?.quantity) || 1));
+    if (!Number.isFinite(merchId)) {
+      return reply.status(400).send({ error: "merch_id requis" });
+    }
+    const client = await pool.connect();
+    try {
+      const row = await repo.getMerchForCheckout(client, merchId);
+      if (!row) {
+        return reply.status(400).send({ error: "Produit non disponible au paiement en ligne" });
+      }
+      const session = await createMerchCheckoutSession({
+        stripePriceId: row.stripe_price_id,
+        merchId: row.id,
+        merchName: row.name,
+        quantity: qty,
+      });
+      await repo.insertOrderPending(client, {
+        stripe_session_id: session.id,
+        customer_email: null,
+        line_items: [{ merch_id: row.id, name: row.name, quantity: qty }],
+      });
+      if (!session.url) {
+        return reply.status(500).send({ error: "Session Stripe sans URL" });
+      }
+      return { url: session.url };
+    } catch (e) {
+      request.log.error(e);
+      return reply
+        .status(500)
+        .send({ error: e instanceof Error ? e.message : "Échec création session" });
+    } finally {
+      client.release();
+    }
   });
 
   const admin = {
@@ -189,6 +274,110 @@ export async function registerPortalRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get("/api/admin/dashboard", admin, async (_request, reply) => {
+    const pool = getPortalPool();
+    if (!pool) return noDb(reply);
+    const client = await pool.connect();
+    try {
+      return await repo.getDashboardStats(client);
+    } finally {
+      client.release();
+    }
+  });
+
+  app.get("/api/admin/orders", admin, async (_request, reply) => {
+    const pool = getPortalPool();
+    if (!pool) return noDb(reply);
+    const client = await pool.connect();
+    try {
+      const orders = await repo.listOrdersAdmin(client);
+      return {
+        orders,
+        stripe_payments_base_url: stripePaymentsDashboardBase(),
+      };
+    } finally {
+      client.release();
+    }
+  });
+
+  app.get<{
+    Params: { id: string };
+  }>("/api/admin/negotiations/:id/messages", admin, async (request, reply) => {
+    const pool = getPortalPool();
+    if (!pool) return noDb(reply);
+    const id = Number(request.params.id);
+    if (!Number.isFinite(id)) return reply.status(400).send({ error: "id invalide" });
+    const client = await pool.connect();
+    try {
+      return await repo.listNegotiationMessages(client, id);
+    } finally {
+      client.release();
+    }
+  });
+
+  app.post<{
+    Params: { id: string };
+    Body: {
+      template_key: string;
+      model_label?: string;
+      slots_text?: string;
+      when_where?: string;
+    };
+  }>("/api/admin/negotiations/:id/sms", admin, async (request, reply) => {
+    const pool = getPortalPool();
+    if (!pool) return noDb(reply);
+    const id = Number(request.params.id);
+    if (!Number.isFinite(id)) return reply.status(400).send({ error: "id invalide" });
+    const key = request.body?.template_key;
+    if (!key || !isSmsTemplateKey(key)) {
+      return reply.status(400).send({ error: "template_key invalide" });
+    }
+    const client = await pool.connect();
+    try {
+      const nego = await repo.getNegotiation(client, id);
+      if (!nego) return reply.status(404).send({ error: "Négociation introuvable" });
+      const phone = normalizeToE164(nego.seller_phone ?? "");
+      if (!phone) {
+        return reply.status(400).send({ error: "Numéro vendeur manquant ou invalide" });
+      }
+      const slotsText = request.body?.slots_text;
+      const whenWhere = request.body?.when_where;
+      const vPre = validateSmsTemplatePayload(key, { slotsText, whenWhere });
+      if (!vPre.ok) return reply.status(400).send({ error: vPre.error });
+      const previewBody = buildSmsFromTemplate(key, {
+        modelLabel: request.body?.model_label ?? nego.title ?? undefined,
+        slotsText,
+        whenWhere,
+      });
+      const vLen = validateSmsBodyLength(previewBody);
+      if (!vLen.ok) return reply.status(400).send({ error: vLen.error });
+      const res = await smsWithTemplate({
+        toE164: phone,
+        template: key,
+        modelLabel: request.body?.model_label ?? nego.title ?? undefined,
+        slotsText,
+        whenWhere,
+      });
+      const bodyText = previewBody;
+      await repo.insertNegotiationMessage(client, {
+        negotiation_id: id,
+        direction: "out",
+        body: bodyText,
+        provider_id: res.data?.id ?? null,
+        template_key: key,
+      });
+      await repo.updateNegotiation(client, id, {});
+      return { ok: true, provider_id: res.data?.id ?? null };
+    } catch (e) {
+      request.log.error(e);
+      return reply.status(500).send({
+        error: e instanceof Error ? e.message : "Échec envoi SMS",
+      });
+    } finally {
+      client.release();
+    }
+  });
+
   app.post<{
     Body: {
       name: string;
@@ -196,6 +385,7 @@ export async function registerPortalRoutes(app: FastifyInstance) {
       price_cad?: number | null;
       image_url?: string | null;
       external_url?: string | null;
+      stripe_price_id?: string | null;
       sort_order?: number;
       published?: boolean;
     };
@@ -316,12 +506,221 @@ export async function registerPortalRoutes(app: FastifyInstance) {
     }
   });
 
+  const slugRe = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+  function validVehicleSlug(s: string): boolean {
+    return s.length >= 1 && s.length <= 120 && slugRe.test(s);
+  }
+
+  app.get("/api/admin/vehicle-projects", admin, async (_request, reply) => {
+    const pool = getPortalPool();
+    if (!pool) return noDb(reply);
+    const client = await pool.connect();
+    try {
+      return await repo.listAllVehicleProjectsWithMedia(client);
+    } finally {
+      client.release();
+    }
+  });
+
+  app.post<{
+    Body: {
+      slug?: string;
+      title?: string;
+      summary?: string;
+      sort_order?: number;
+      published?: boolean;
+    };
+  }>("/api/admin/vehicle-projects", admin, async (request, reply) => {
+    const pool = getPortalPool();
+    if (!pool) return noDb(reply);
+    const slug = request.body?.slug?.trim().toLowerCase() ?? "";
+    const title = request.body?.title?.trim() ?? "";
+    if (!slug || !title) {
+      return reply.status(400).send({ error: "slug et title requis" });
+    }
+    if (!validVehicleSlug(slug)) {
+      return reply.status(400).send({
+        error: "slug invalide (lettres minuscules, chiffres, tirets)",
+      });
+    }
+    const client = await pool.connect();
+    try {
+      const id = await repo.insertVehicleProject(client, {
+        slug,
+        title,
+        summary: request.body?.summary,
+        sort_order: request.body?.sort_order,
+        published: request.body?.published,
+      });
+      return { id };
+    } catch (e: unknown) {
+      const code = (e as { code?: string })?.code;
+      if (code === "23505") {
+        return reply.status(409).send({ error: "Ce slug existe déjà" });
+      }
+      throw e;
+    } finally {
+      client.release();
+    }
+  });
+
+  app.patch<{
+    Params: { id: string };
+    Body: Record<string, unknown>;
+  }>("/api/admin/vehicle-projects/:id", admin, async (request, reply) => {
+    const pool = getPortalPool();
+    if (!pool) return noDb(reply);
+    const id = Number(request.params.id);
+    if (!Number.isFinite(id)) return reply.status(400).send({ error: "id invalide" });
+    const body = request.body as {
+      slug?: string;
+      title?: string;
+      summary?: string;
+      sort_order?: number;
+      published?: boolean;
+    };
+    const patch: Parameters<typeof repo.updateVehicleProject>[2] = {};
+    if (body.slug !== undefined) {
+      const s = body.slug.trim().toLowerCase();
+      if (!validVehicleSlug(s)) {
+        return reply.status(400).send({
+          error: "slug invalide (lettres minuscules, chiffres, tirets)",
+        });
+      }
+      patch.slug = s;
+    }
+    if (body.title !== undefined) patch.title = body.title.trim();
+    if (body.summary !== undefined) patch.summary = body.summary;
+    if (body.sort_order !== undefined) patch.sort_order = body.sort_order;
+    if (body.published !== undefined) patch.published = body.published;
+    const client = await pool.connect();
+    try {
+      await repo.updateVehicleProject(client, id, patch);
+      return { ok: true };
+    } catch (e: unknown) {
+      const code = (e as { code?: string })?.code;
+      if (code === "23505") {
+        return reply.status(409).send({ error: "Ce slug existe déjà" });
+      }
+      throw e;
+    } finally {
+      client.release();
+    }
+  });
+
+  app.delete<{
+    Params: { id: string };
+  }>("/api/admin/vehicle-projects/:id", admin, async (request, reply) => {
+    const pool = getPortalPool();
+    if (!pool) return noDb(reply);
+    const id = Number(request.params.id);
+    const client = await pool.connect();
+    try {
+      await repo.deleteVehicleProject(client, id);
+      return { ok: true };
+    } finally {
+      client.release();
+    }
+  });
+
+  app.post<{
+    Params: { id: string };
+    Body: {
+      media_type?: string;
+      url?: string;
+      caption?: string;
+      sort_order?: number;
+    };
+  }>("/api/admin/vehicle-projects/:id/media", admin, async (request, reply) => {
+    const pool = getPortalPool();
+    if (!pool) return noDb(reply);
+    const projectId = Number(request.params.id);
+    if (!Number.isFinite(projectId)) return reply.status(400).send({ error: "id invalide" });
+    const mediaType = request.body?.media_type;
+    const url = request.body?.url?.trim() ?? "";
+    if (mediaType !== "image" && mediaType !== "video") {
+      return reply.status(400).send({ error: "media_type doit être image ou video" });
+    }
+    if (!url) return reply.status(400).send({ error: "url requis" });
+    const client = await pool.connect();
+    try {
+      const mediaId = await repo.insertVehicleProjectMedia(client, projectId, {
+        media_type: mediaType,
+        url,
+        caption: request.body?.caption,
+        sort_order: request.body?.sort_order,
+      });
+      return { id: mediaId };
+    } finally {
+      client.release();
+    }
+  });
+
+  app.patch<{
+    Params: { id: string };
+    Body: Record<string, unknown>;
+  }>("/api/admin/vehicle-project-media/:id", admin, async (request, reply) => {
+    const pool = getPortalPool();
+    if (!pool) return noDb(reply);
+    const id = Number(request.params.id);
+    if (!Number.isFinite(id)) return reply.status(400).send({ error: "id invalide" });
+    const body = request.body as {
+      media_type?: string;
+      url?: string;
+      caption?: string;
+      sort_order?: number;
+    };
+    const patch: Parameters<typeof repo.updateVehicleProjectMedia>[2] = {};
+    if (body.media_type !== undefined) {
+      if (body.media_type !== "image" && body.media_type !== "video") {
+        return reply.status(400).send({ error: "media_type doit être image ou video" });
+      }
+      patch.media_type = body.media_type;
+    }
+    if (body.url !== undefined) patch.url = body.url.trim();
+    if (body.caption !== undefined) patch.caption = body.caption;
+    if (body.sort_order !== undefined) patch.sort_order = body.sort_order;
+    const client = await pool.connect();
+    try {
+      await repo.updateVehicleProjectMedia(client, id, patch);
+      return { ok: true };
+    } finally {
+      client.release();
+    }
+  });
+
+  app.delete<{
+    Params: { id: string };
+  }>("/api/admin/vehicle-project-media/:id", admin, async (request, reply) => {
+    const pool = getPortalPool();
+    if (!pool) return noDb(reply);
+    const id = Number(request.params.id);
+    const client = await pool.connect();
+    try {
+      await repo.deleteVehicleProjectMedia(client, id);
+      return { ok: true };
+    } finally {
+      client.release();
+    }
+  });
+
+  app.get("/api/admin/negotiations/stats", admin, async (_request, reply) => {
+    const pool = getPortalPool();
+    if (!pool) return noDb(reply);
+    const client = await pool.connect();
+    try {
+      return await repo.getAdminPipelineStats(client);
+    } finally {
+      client.release();
+    }
+  });
+
   app.get("/api/admin/negotiations", admin, async (_request, reply) => {
     const pool = getPortalPool();
     if (!pool) return noDb(reply);
     const client = await pool.connect();
     try {
-      return await repo.listNegotiations(client);
+      return await repo.listNegotiationsAdmin(client);
     } finally {
       client.release();
     }

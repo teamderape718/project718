@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS merch_products (
   price_cad NUMERIC(12, 2),
   image_url TEXT,
   external_url TEXT,
+  stripe_price_id TEXT,
   sort_order INT NOT NULL DEFAULT 0,
   published BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -96,3 +97,80 @@ CREATE TABLE IF NOT EXISTS app_kv (
 CREATE INDEX IF NOT EXISTS idx_site_videos_published ON site_videos (published, sort_order);
 CREATE INDEX IF NOT EXISTS idx_merch_published ON merch_products (published, sort_order);
 CREATE INDEX IF NOT EXISTS idx_inventory_status ON inventory_items (status, sort_order);
+
+-- Stripe merch (idempotent for existing DBs)
+ALTER TABLE merch_products ADD COLUMN IF NOT EXISTS stripe_price_id TEXT;
+
+CREATE TABLE IF NOT EXISTS orders (
+  id SERIAL PRIMARY KEY,
+  stripe_session_id TEXT UNIQUE,
+  stripe_payment_intent TEXT,
+  customer_email TEXT,
+  amount_cad NUMERIC(12, 2),
+  currency TEXT NOT NULL DEFAULT 'cad',
+  status TEXT NOT NULL DEFAULT 'pending',
+  line_items JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_orders_created ON orders (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status);
+
+CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+  id TEXT PRIMARY KEY,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS negotiation_messages (
+  id BIGSERIAL PRIMARY KEY,
+  negotiation_id INTEGER NOT NULL REFERENCES negotiations (id) ON DELETE CASCADE,
+  direction TEXT NOT NULL CHECK (direction IN ('in', 'out')),
+  body TEXT NOT NULL,
+  provider_id TEXT,
+  template_key TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_nego_msgs_nego ON negotiation_messages (negotiation_id, created_at DESC);
+
+-- Idempotence retries Telnyx (même message.id)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_nego_msgs_provider_unique
+  ON negotiation_messages (provider_id)
+  WHERE provider_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_negotiations_seller_phone ON negotiations (seller_phone);
+
+CREATE TABLE IF NOT EXISTS vehicle_projects (
+  id SERIAL PRIMARY KEY,
+  slug TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  summary TEXT DEFAULT '',
+  sort_order INT NOT NULL DEFAULT 0,
+  published BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS vehicle_project_media (
+  id SERIAL PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES vehicle_projects (id) ON DELETE CASCADE,
+  media_type TEXT NOT NULL CHECK (media_type IN ('image', 'video')),
+  url TEXT NOT NULL,
+  caption TEXT DEFAULT '',
+  sort_order INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_vpm_project ON vehicle_project_media (project_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_vehicle_projects_pub ON vehicle_projects (published, sort_order);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id BIGSERIAL PRIMARY KEY,
+  actor TEXT NOT NULL DEFAULT 'telegram',
+  action TEXT NOT NULL,
+  detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log (created_at DESC);

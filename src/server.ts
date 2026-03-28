@@ -1,13 +1,16 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import fastifyCors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
+import type { FastifyRequest } from "fastify";
 import Fastify from "fastify";
 import { loadEnv } from "./config/env.js";
 import { getPortalPool } from "./portal/db-access.js";
 import { runKijijiCycle } from "./pipeline/kijiji-cycle.js";
 import { registerPortalRoutes } from "./routes/portal-routes.js";
+import { registerWebhookRoutes } from "./routes/webhooks.js";
 import { scrapeKijijiQuebec } from "./scrapers/kijiji/kijiji-quebec.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -18,12 +21,33 @@ const env = loadEnv();
 export async function buildServer() {
   const app = Fastify({ logger: true });
 
+  app.addHook("preParsing", (request, _reply, payload, done) => {
+    const pathOnly = request.url.split("?")[0] ?? "";
+    if (!pathOnly.startsWith("/webhooks/")) {
+      done(null, payload);
+      return;
+    }
+    const chunks: Buffer[] = [];
+    payload.on("data", (chunk: Buffer) => {
+      chunks.push(chunk);
+    });
+    payload.on("end", () => {
+      const buf = Buffer.concat(chunks);
+      (request as FastifyRequest & { rawWebhookBody?: Buffer }).rawWebhookBody = buf;
+      done(null, Readable.from(buf));
+    });
+    payload.on("error", (err: Error) => {
+      done(err, undefined);
+    });
+  });
+
   await app.register(fastifyCors, {
     origin: true,
     credentials: true,
   });
 
   await registerPortalRoutes(app);
+  await registerWebhookRoutes(app);
 
   app.get("/health", async () => ({ ok: true }));
 
@@ -123,6 +147,7 @@ export async function buildServer() {
       if (
         request.method === "GET" &&
         !pathOnly.startsWith("/api") &&
+        !pathOnly.startsWith("/webhooks") &&
         !pathOnly.startsWith("/pipeline") &&
         !pathOnly.startsWith("/scrape") &&
         pathOnly !== "/health"

@@ -1,4 +1,11 @@
 import { loadEnv } from "../config/env.js";
+import {
+  buildSmsFromTemplate,
+  validateSmsBodyLength,
+  validateSmsTemplatePayload,
+  type SmsTemplateKey,
+} from "./sms-templates.js";
+import { normalizeToE164 } from "../utils/phone.js";
 
 const TELNYX_MESSAGES_URL = "https://api.telnyx.com/v2/messages";
 
@@ -69,8 +76,29 @@ export function buildDealAlertSms(params: {
 }
 
 export function buildSellerOutreachSms(modelLabel: string): string {
-  const m = modelLabel.trim() || "véhicule";
-  return `Bonjour, est-ce que votre ${m} est toujours disponible? Je suis un acheteur sérieux.`;
+  return buildSmsFromTemplate("contact", { modelLabel });
+}
+
+export async function smsWithTemplate(params: {
+  toE164: string;
+  template: SmsTemplateKey;
+  modelLabel?: string;
+  slotsText?: string;
+  whenWhere?: string;
+}): Promise<TelnyxMessageResponse> {
+  const pre = validateSmsTemplatePayload(params.template, {
+    slotsText: params.slotsText,
+    whenWhere: params.whenWhere,
+  });
+  if (!pre.ok) throw new Error(pre.error);
+  const text = buildSmsFromTemplate(params.template, {
+    modelLabel: params.modelLabel,
+    slotsText: params.slotsText,
+    whenWhere: params.whenWhere,
+  });
+  const len = validateSmsBodyLength(text);
+  if (!len.ok) throw new Error(len.error);
+  return sendSms({ to: params.toE164, text });
 }
 
 export async function notifyDealToOwner(params: {
@@ -92,6 +120,10 @@ export async function smsSellerTemplate(
   sellerPhoneE164: string,
   modelLabel: string
 ): Promise<TelnyxMessageResponse> {
+  const to = normalizeToE164(sellerPhoneE164);
+  if (!to) throw new Error("Numéro vendeur invalide pour SMS");
   const text = buildSellerOutreachSms(modelLabel);
-  return sendSms({ to: sellerPhoneE164, text });
+  const len = validateSmsBodyLength(text);
+  if (!len.ok) throw new Error(len.error);
+  return sendSms({ to, text });
 }
